@@ -8,7 +8,7 @@ window.APP_CONFIG = {
   APP_NAME: "The Together List",
   TAGLINE: "Things we want to do together",
 
-  SUPABASE_URL: "https://etzttvzfwwmeliurmyvn.supabase.co/rest/v1/",
+  SUPABASE_URL: "https://etzttvzfwwmeliurmyvn.supabase.co",
   SUPABASE_KEY: "sb_publishable_Kxjb6UstCLW1qk2TgGJ10g_yoJ5pphB",
 
   // Turn on after you've deployed the calendar-feed function (README step 6)
