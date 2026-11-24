@@ -25,6 +25,11 @@ function makeSupabaseApi() {
     },
     async verifyCode(email, token) { return ok(await sb.auth.verifyOtp({ email, token, type: "email" })); },
     async signOut() { await sb.auth.signOut(); },
+    async signInPassword(email, password) { return ok(await sb.auth.signInWithPassword({ email, password })); },
+    async setPassword(password) {
+      return ok(await sb.auth.updateUser({ password, data: { has_password: true } })).user;
+    },
+    async updateMeta(data) { return ok(await sb.auth.updateUser({ data })).user; },
     async isMember() { return ok(await sb.rpc("is_member")); },
     async loadAll() {
       const [profiles, items, polls, votes, people, payments] = await Promise.all([
@@ -144,7 +149,7 @@ const STATUSES = [
   ["idea", "Idea"], ["planning", "Planning"], ["booked", "Booked"], ["done", "Done"],
 ];
 const statusLabel = (s) => (STATUSES.find((x) => x[0] === s) || [s, s])[1];
-const CATEGORIES = ["Outdoors", "Food & drink", "Day trip", "Weekend away", "Creative", "Wellness", "Event", "At home"];
+const CATEGORIES = ["Outdoors", "Food & drink", "Day trip", "Weekend away", "Creative", "Wellness", "Event", "At home", "Other"];
 const COLOURS = ["#3d9a6a", "#f2775a", "#f0b43c", "#5b93dd", "#a98be0", "#ee6b8f", "#2fb3a8", "#8c7b6b"];
 
 function toast(msg, ms = 2600) {
@@ -200,13 +205,15 @@ window.addEventListener("hashchange", () => { render(); window.scrollTo(0, 0); }
 // ---------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------
+const BLANKET = `<div class="blanket" aria-hidden="true"></div>`;
 function render() {
   const app = $("#app");
   document.title = C.APP_NAME;
-  if (!S.session) { app.innerHTML = loginView(); $("#nav").hidden = true; return; }
-  if (S.member === null || (S.member && !S.loaded)) { app.innerHTML = `<div class="center muted">Loading…</div>`; return; }
-  if (!S.member) { app.innerHTML = notMemberView(); $("#nav").hidden = true; return; }
-  if (!S.me) { app.innerHTML = setupView(); $("#nav").hidden = true; return; }
+  if (!S.session) { app.innerHTML = BLANKET + loginView(); $("#nav").hidden = true; return; }
+  if (S.member === null || (S.member && !S.loaded)) { app.innerHTML = BLANKET + `<div class="center muted">Loading…</div>`; return; }
+  if (!S.member) { app.innerHTML = BLANKET + notMemberView(); $("#nav").hidden = true; return; }
+  if (!S.me) { app.innerHTML = BLANKET + setupView(); $("#nav").hidden = true; return; }
+  if (needsPassword()) { app.innerHTML = BLANKET + passwordView(); $("#nav").hidden = true; return; }
 
   const r = route();
   $("#nav").hidden = false;
@@ -216,10 +223,13 @@ function render() {
   else if (r.view === "calendar") html = calendarView();
   else if (r.view === "me") html = meView();
   else html = listView();
-  app.innerHTML = html;
+  app.innerHTML = BLANKET + html;
   renderNav(r.view);
   if (r.view === "me") loadCalendarLink();
+  maybeWelcome();
 }
+const meta = () => S.session?.user?.user_metadata || {};
+const needsPassword = () => !meta().has_password || S.resetPassword;
 
 function renderNav(view) {
   const unvoted = S.polls.filter((p) => p.status === "open" && !S.votes.some((v) => v.poll_id === p.id && v.user_id === S.me.id)).length;
@@ -243,24 +253,82 @@ const ICONS = {
 
 // ----- Auth screens --------------------------------------------------
 function loginView() {
-  return `
-  <div class="login">
-    <div class="blanket"></div>
-    <h1>${esc(C.APP_NAME)}</h1>
-    <p class="muted">${esc(C.TAGLINE || "")}</p>
-    ${S.codeSent ? `
+  let body;
+  if (S.codeSent) body = `
       <form data-form="code" class="stack">
         <p>We've emailed a code to <b>${esc(S.loginEmail)}</b>. Type it here, or just tap the link in the email.</p>
         <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Code" required pattern="[0-9]{6,10}" />
-        <button class="btn primary">Sign in</button>
+        <button class="btn primary">Continue</button>
         <button type="button" class="btn link" data-action="change-email">Use a different email</button>
-      </form>` : `
+      </form>`;
+  else if (S.loginMode === "code") body = `
       <form data-form="email" class="stack">
+        <p class="small">First time here, or forgotten your password? We'll email you a code, then you can choose a password.</p>
         <input name="email" type="email" autocomplete="email" placeholder="Your email" required value="${esc(S.loginEmail)}" />
-        <button class="btn primary">Send me a sign-in code</button>
-      </form>`}
+        <button class="btn primary">Email me a code</button>
+        <button type="button" class="btn link" data-action="login-mode" data-v="password">I have a password</button>
+      </form>`;
+  else body = `
+      <form data-form="password-login" class="stack">
+        <input name="email" type="email" autocomplete="email" placeholder="Your email" required value="${esc(S.loginEmail)}" />
+        <input name="password" type="password" autocomplete="current-password" placeholder="Password" required />
+        <button class="btn primary">Sign in</button>
+        <button type="button" class="btn link" data-action="login-mode" data-v="code">First time here, or forgot your password?</button>
+      </form>`;
+  return `
+  <div class="login">
+    <h1>${esc(C.APP_NAME)}</h1>
+    <p class="muted">${esc(C.TAGLINE || "")}</p>
+    ${body}
   </div>`;
 }
+function passwordView() {
+  const reset = !!meta().has_password;
+  return `
+  <div class="login">
+    <h1>${reset ? "New password" : "One last thing"}</h1>
+    <p class="muted">${reset ? "Choose a new password." : "Choose a password so next time you can sign in without waiting for a code."}</p>
+    <form data-form="set-password" class="stack">
+      <input type="email" name="username" autocomplete="username" value="${esc(S.session.user.email)}" hidden />
+      <input name="password" type="password" autocomplete="new-password" placeholder="Password (at least 6 characters)" required minlength="6" />
+      <input name="password2" type="password" autocomplete="new-password" placeholder="Type it again" required minlength="6" />
+      <button class="btn primary">Save password</button>
+    </form>
+  </div>`;
+}
+
+// ----- Welcome pop-up (once per person, re-openable from Me) -----------
+function maybeWelcome() {
+  if (meta().seen_welcome || S.welcomeShown || !$("#modal").hidden) return;
+  S.welcomeShown = true;
+  showWelcome();
+}
+function showWelcome() {
+  openModal(`
+  <div class="welcome stack">
+    <div class="row between"><span class="wave">🧺</span><button type="button" class="iconbtn" data-action="dismiss-welcome" aria-label="Close">×</button></div>
+    <h2>Welcome to ${esc(C.APP_NAME)}</h2>
+    <p>${esc(C.APP_NAME)} helps us to organise and keep track of activities we'd like to do as a group.</p>
+    <ol class="steps">
+      <li><b>Add something:</b> tap the <span class="mini-fab">+</span> on <i>Our list</i>. Only a name is needed; add dates, cost and details whenever you know them.</li>
+      <li><b>Manage it:</b> tap any item to move it from Idea → Planning → Booked → Done, tap faces to show who's in, and record who's paid what.</li>
+      <li><b>Run a poll:</b> on <i>Polls</i>, tap <span class="mini-fab">+</span> and ask the group. Everyone taps <i>I'm keen</i> or <i>Not for me</i>, then <i>Make it an item</i> puts it on the list.</li>
+      <li><b>See what's coming:</b> the <i>Calendar</i> shows everything with a date. Items can be added to your phone's calendar or shared to Messenger.</li>
+    </ol>
+    <p class="small muted">You can see this again any time from the <i>Me</i> tab.</p>
+    <button class="btn primary" data-action="dismiss-welcome">Got it, let's go</button>
+  </div>`);
+}
+
+// ----- Theme -------------------------------------------------------------
+function getTheme() { try { return localStorage.getItem("tl-theme") || "light"; } catch { return "light"; } }
+function applyTheme(t) {
+  const dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#17151c" : "#fbf7f1");
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => applyTheme(getTheme()));
+applyTheme(getTheme());
 const notMemberView = () => `
   <div class="login"><h1>Not on the list (yet)</h1>
   <p>${esc(S.session.user.email)} isn't one of the invited emails. Ask whoever set this up to add you.</p>
@@ -303,7 +371,7 @@ function listView() {
       (i.payment_due && i.payment_due >= today && daysUntil(i.payment_due) <= 7)));
 
   return `
-  <header class="top"><div class="blanket"></div>
+  <header class="top">
     <h1>${esc(C.APP_NAME)}</h1>
     <p class="muted">${S.items.length} things · ${doneCount} done together</p>
   </header>
@@ -489,7 +557,7 @@ function calendarView() {
     const day = `${S.calMonth}-${String(d).padStart(2, "0")}`;
     const evs = on(day);
     const dl = deadlines(day).length;
-    cells += `<button class="cell ${day === today ? "today" : ""} ${day === S.calDay ? "sel" : ""}" data-action="cal-day" data-v="${day}">
+    cells += `<button class="cell ${evs.length ? "has-ev" : ""} ${day === today ? "today" : ""} ${day === S.calDay ? "sel" : ""}" data-action="cal-day" data-v="${day}">
       <span class="n">${d}</span>
       <span class="evs">${evs.slice(0, 2).map((i) => `<span class="ev s-${i.status}">${esc(i.title)}</span>`).join("")}${evs.length > 2 ? `<span class="more">+${evs.length - 2}</span>` : ""}</span>
       <span class="dots">${evs.map((i) => `<i class="s-${i.status}"></i>`).join("")}${dl ? `<i class="dl"></i>` : ""}</span>
@@ -541,6 +609,16 @@ function meView() {
     <p class="small">Subscribe once and everything with a date shows up in your calendar, updating as plans change. This link is private to you.</p>
     <div id="calfeed" class="stack"><span class="muted small">Loading your link…</span></div>
   </section>` : ""}
+  <section><h2>Appearance</h2>
+    <div class="seg theme">${[["light", "☀️ Light"], ["dark", "🌙 Dark"], ["system", "Match phone"]].map(([k, l]) => `<button class="${getTheme() === k ? "on" : ""}" data-action="theme" data-v="${k}">${l}</button>`).join("")}</div>
+    <p class="muted small">Saved on this device.</p>
+  </section>
+  <section><h2>Account</h2>
+    <div class="row wrap gap">
+      <button class="btn sm" data-action="show-welcome">Show the intro again</button>
+      <button class="btn sm" data-action="change-password">Change password</button>
+    </div>
+  </section>
   <section><h2>Put it on your home screen</h2>
     <p class="small"><b>iPhone:</b> open this page in Safari → Share → <i>Add to Home Screen</i>.<br>
     <b>Android:</b> Chrome menu ⋮ → <i>Add to Home screen</i>.</p>
@@ -580,6 +658,10 @@ function openModal(html) {
 }
 function closeModal() {
   const m = $("#modal");
+  if (m.querySelector(".welcome") && !meta().seen_welcome) {
+    // However they close the intro, don't show it automatically again
+    api.updateMeta({ seen_welcome: true }).then((u) => { if (u) S.session.user = u; }).catch(console.error);
+  }
   m.hidden = true;
   m.innerHTML = "";
   document.body.classList.remove("noscroll");
@@ -595,10 +677,9 @@ function itemForm(i = {}, extra = {}) {
     <label>What's the plan?<input name="title" required maxlength="140" value="${v("title")}" placeholder="Proper picnic with woolen blankets" /></label>
     <label>Details<textarea name="description" rows="3" placeholder="Ideas, what to bring, anything useful">${v("description")}</textarea></label>
     <div class="two">
-      <label>Type<input name="category" list="cats" value="${v("category")}" /></label>
+      <label>Type<select name="category"><option value="">Choose…</option>${[...CATEGORIES, ...(i.category && !CATEGORIES.includes(i.category) ? [i.category] : [])].map((c) => `<option value="${esc(c)}" ${i.category === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
       <label>Status<select name="status">${STATUSES.map(([k, l]) => `<option value="${k}" ${(i.status || "idea") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     </div>
-    <datalist id="cats">${CATEGORIES.map((c) => `<option value="${esc(c)}">`).join("")}</datalist>
     <label>Where<input name="location" value="${v("location")}" /></label>
     <fieldset><legend>When</legend>
       <div class="two">
@@ -805,6 +886,11 @@ document.addEventListener("click", (e) => {
     case "copy": copyText(v).then(() => toast("Copied")); break;
     case "reset-cal": run(async () => { await api.resetCalendarToken(); await loadCalendarLink(); }, "New link made — re-subscribe with it"); break;
     case "change-email": S.codeSent = false; render(); break;
+    case "login-mode": S.loginMode = v; S.codeSent = false; render(); break;
+    case "theme": try { localStorage.setItem("tl-theme", v); } catch {} applyTheme(v); render(); break;
+    case "show-welcome": showWelcome(); break;
+    case "dismiss-welcome": closeModal(); break;
+    case "change-password": S.resetPassword = true; render(); break;
     case "sign-out": run(async () => { await api.signOut(); }); break;
   }
 });
@@ -824,7 +910,23 @@ document.addEventListener("submit", (e) => {
       await api.sendCode(S.loginEmail);
       S.codeSent = true; render();
     }).finally(done); break;
-    case "code": run(async () => { await api.verifyCode(S.loginEmail, d.code.trim()); }).finally(done); break;
+    case "code": run(async () => {
+      // Signed in by code = first time or forgotten password, so ask for a (new) password next
+      await api.verifyCode(S.loginEmail, d.code.trim());
+      S.resetPassword = true;
+      render();
+    }).finally(done); break;
+    case "password-login": run(async () => {
+      S.loginEmail = d.email.trim().toLowerCase();
+      await api.signInPassword(S.loginEmail, d.password);
+    }).finally(done); break;
+    case "set-password": run(async () => {
+      if (d.password !== d.password2) throw new Error("Those passwords don't match");
+      const user = await api.setPassword(d.password);
+      if (user) S.session.user = user;
+      S.resetPassword = false;
+      render();
+    }, "Password saved").finally(done); break;
     case "setup": case "profile": run(async () => {
       S.me = await api.saveProfile({
         id: S.session.user.id, email: S.session.user.email,
@@ -874,7 +976,7 @@ async function onSession(session) {
   const changed = session?.user?.id !== S.session?.user?.id;
   S.session = session;
   if (!session) {
-    Object.assign(S, { member: null, me: null, loaded: false, codeSent: false });
+    Object.assign(S, { member: null, me: null, loaded: false, codeSent: false, loginMode: "password", resetPassword: false, welcomeShown: false });
     render(); return;
   }
   if (!changed && (S.member !== null || checking)) return;
