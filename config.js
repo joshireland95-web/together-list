@@ -9,7 +9,7 @@ window.APP_CONFIG = {
   TAGLINE: "Things we want to do together",
 
   SUPABASE_URL: "https://etzttvzfwwmeliurmyvn.supabase.co",
-  SUPABASE_KEY: "sb_publishable_Kxjb6UstCLW1qk2TgGJ10g_yoJ5pphB",
+  SUPABASE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV0enR0dnpmd3dtZWxpdXJteXZuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUzMjI1NzUsImV4cCI6MjExMDg5ODU3NX0.JDUSOYqiT4nOFHCElkNMnpymZ7dhQ17kNSERqwx0lLM",
 
   // Turn on after you've deployed the calendar-feed function (README step 6)
   CALENDAR_FEED: false,
